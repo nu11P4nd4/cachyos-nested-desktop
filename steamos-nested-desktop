@@ -1,0 +1,83 @@
+#!/usr/bin/bash
+
+set -eu
+
+# --- Configuration for Legion Go (2560x1600) ---
+# We force the native resolution and use 2x scaling to fix the "tiny UI" issue.
+NATIVE_WIDTH=2560
+NATIVE_HEIGHT=1600
+SCALE_FACTOR=2
+
+# Remove the performance overlay, it meddles with some tasks
+unset LD_PRELOAD
+
+function cleanup()
+{
+    # Flush fuse mounts beneath here
+    umount --recursive $NEW_XDG_RUNTIME_DIR  || true
+    rm -Rf $NEW_XDG_RUNTIME_DIR
+}
+
+# Create a new XDG_RUNTIME_DIR to isolate this session
+NEW_XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR/nested_plasma
+trap cleanup EXIT
+
+cleanup
+mkdir $NEW_XDG_RUNTIME_DIR --mode 0700
+
+# --- Link Audio (PulseAudio / Pipewire) ---
+# This ensures sound works inside the nested desktop
+mkdir -p $NEW_XDG_RUNTIME_DIR/pulse --mode 0700
+if [ -e "$XDG_RUNTIME_DIR/pulse/native" ]; then
+    ln -s "$XDG_RUNTIME_DIR/pulse/native" "$NEW_XDG_RUNTIME_DIR/pulse/native"
+fi
+
+# Link all pipewire sockets
+for f in $XDG_RUNTIME_DIR/pipewire*; do
+    if [ -e "$f" ]; then
+        ln -s "$f" "$NEW_XDG_RUNTIME_DIR/"
+    fi
+done
+
+# --- ARCH LINUX / CACHYOS FIX ---
+# Bazzite uses 'kwin_wayland_wrapper', but CachyOS (Arch) uses 'kwin_wayland'.
+# We need to find the real binary, otherwise the taskbar/wallpaper won't load.
+
+REAL_KWIN=""
+if [ -x /usr/bin/kwin_wayland ]; then
+    REAL_KWIN="/usr/bin/kwin_wayland"
+elif [ -x /usr/bin/kwin_wayland_wrapper ]; then
+    REAL_KWIN="/usr/bin/kwin_wayland_wrapper"
+else
+    echo "Error: Could not find kwin_wayland binary!"
+    exit 1
+fi
+
+# Create a 'bin' directory in our temporary runtime env
+mkdir -p $NEW_XDG_RUNTIME_DIR/bin
+
+# Create a wrapper script named 'kwin_wayland'.
+# When startplasma-wayland runs, it will find THIS script first because of the PATH export below.
+# This script then launches the REAL kwin with our resolution arguments.
+cat <<EOF > $NEW_XDG_RUNTIME_DIR/bin/kwin_wayland
+#!/usr/bin/bash
+exec $REAL_KWIN --width $NATIVE_WIDTH --height $NATIVE_HEIGHT --no-lockscreen "\$@"
+EOF
+
+# Make the wrapper executable
+chmod a+x $NEW_XDG_RUNTIME_DIR/bin/kwin_wayland
+
+# Prepend our new bin directory to PATH so our wrapper is used
+export PATH=$NEW_XDG_RUNTIME_DIR/bin:$PATH
+export XDG_RUNTIME_DIR=$NEW_XDG_RUNTIME_DIR
+
+# --- SCALING FIXES ---
+# Force 200% scaling for readability on the 8.8" screen
+export QT_SCALE_FACTOR=$SCALE_FACTOR
+export GDK_SCALE=$SCALE_FACTOR
+# Ensure Plasma respects these settings
+export PLASMA_USE_QT_SCALING=1
+
+# --- Launch the Session ---
+# Start the full Plasma Wayland session
+dbus-run-session startplasma-wayland
