@@ -6,7 +6,7 @@ set -eu
 # We force the native resolution and use 2x scaling to fix the "tiny UI" issue.
 NATIVE_WIDTH=2560
 NATIVE_HEIGHT=1600
-SCALE_FACTOR=2
+SCALE_FACTOR=1.2
 
 # Remove the performance overlay, it meddles with some tasks
 unset LD_PRELOAD
